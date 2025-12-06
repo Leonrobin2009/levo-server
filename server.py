@@ -25,7 +25,7 @@ async def chat(request: Request):
     user_prompt = data.get("prompt", "")
 
     completion = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[
             {
                 "role": "system",
@@ -41,3 +41,4 @@ async def chat(request: Request):
 
     reply = completion.choices[0].message.content
     return {"response": reply}
+
