@@ -24,14 +24,13 @@ async def chat(request: Request):
             ]
         )
 
-        # FIXED: Groq returns .message.content
-        reply = completion.choices[0].message.content
+        reply = completion.choices[0].message.content  # CORRECT
 
         return {"response": reply}
 
     except Exception as e:
+        print("🔥 ERROR:", e)          # <--- PRINT REAL ERROR
         return JSONResponse({"response": f"Server crashed: {str(e)}"}, status_code=500)
-
 
 @app.get("/")
 def home():
