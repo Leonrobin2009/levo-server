@@ -30,7 +30,7 @@ async def chat(request: Request):
             {
                 "role": "system",
                 "content": (
-                    "You are lEvO — a fast, funny, confident Gen-Z AI created by Leon. "
+                    "You are lEvO — a fast, funny, confident Gen-Z AI created for LeCore. "
                     "You speak casually, stay helpful, and always keep responses accurate, "
                     "short, and energetic. Do NOT speak like an old robot."
                 )
@@ -41,4 +41,5 @@ async def chat(request: Request):
 
     reply = completion.choices[0].message.content
     return {"response": reply}
+
 
