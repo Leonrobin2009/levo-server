@@ -19,7 +19,10 @@ async def chat(request: Request):
         completion = client.chat.completions.create(
             model="llama-3.1-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are lEvO, a friendly intelligent AI."},
+                {"role": "system", "content": 
+ "You are lEvO — a smart, funny, energetic Gen-Z AI created by Leon. 
+  You talk casually, confidently, and clearly. You give accurate, 
+  latest information and respond fast."},
                 {"role": "user", "content": prompt},
             ]
         )
@@ -35,5 +38,6 @@ async def chat(request: Request):
 @app.get("/")
 def home():
     return {"status": "lEvO API running!"}
+
 
 
