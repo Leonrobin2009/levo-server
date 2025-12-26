@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,11 +23,12 @@ import replicate
 # CONFIG
 # ==========================================================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 client = Groq(api_key=GROQ_API_KEY)
-replicate.Client(api_token=REPLICATE_API_TOKEN)
+replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+
+BASE_URL = os.getenv("BASE_URL", "https://your-render-app.onrender.com")
 
 app = FastAPI()
 limiter = Limiter(key_func=get_remote_address)
@@ -40,18 +41,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+os.makedirs("files", exist_ok=True)
+
 # ==========================================================
 # SYSTEM PROMPT
 # ==========================================================
 SYSTEM_PROMPT = """
-You are lEvO, a smart and calm AI assistant.
+You are lEvO, a calm and intelligent AI.
 
 Rules:
-- Short replies for small talk
-- Long replies only when needed
+- Short replies for greetings
+- Detailed replies only when needed
 - NEVER invent links
-- If links are provided, format them nicely
-- Be accurate, not dramatic
+- If links exist, format clearly
+- No overacting
 """
 
 # ==========================================================
@@ -71,18 +74,18 @@ def save_memory(uid, msg):
     conn.commit()
 
 # ==========================================================
-# LINK SEARCH (REAL)
+# REAL LINK SEARCH
 # ==========================================================
-def get_links(query: str, site: str = None, limit=5):
-    q = query
-    if site:
-        q += f" site:{site}"
+def get_links(query, site=None):
+    q = f"{query} site:{site}" if site else query
     url = f"https://ddg-api.herokuapp.com/search?query={quote_plus(q)}"
     data = requests.get(url).json()
-    results = []
-    for r in data.get("results", [])[:limit]:
-        results.append(f"- [{r['title']}]({r['url']})")
-    return "\n".join(results)
+
+    links = []
+    for r in data.get("results", [])[:5]:
+        links.append(f"{r['title']} → {r['url']}")
+
+    return "\n".join(links)
 
 # ==========================================================
 # CHAT
@@ -91,46 +94,39 @@ def get_links(query: str, site: str = None, limit=5):
 @limiter.limit("15/minute")
 async def chat(request: Request):
     data = await request.json()
-    prompt = data.get("prompt", "").strip()
+    prompt = data.get("prompt", "")
     user_id = data.get("user_id", "guest")
 
-    today = datetime.now().strftime("%A, %d %B %Y")
+    today = datetime.now().strftime("%d %B %Y")
     memory = get_memory(user_id)
 
-    # 🔍 Detect link intent
     wants_amazon = "amazon" in prompt.lower()
     wants_youtube = "youtube" in prompt.lower()
 
-    link_block = ""
-
+    link_data = ""
     if wants_amazon:
-        link_block = get_links(prompt, site="amazon.com")
+        link_data = get_links(prompt, "amazon.com")
+    elif wants_youtube:
+        link_data = get_links(prompt, "youtube.com")
 
-    if wants_youtube:
-        link_block = get_links(prompt, site="youtube.com")
-
-    msgs = [
+    messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Today's real date is {today}"},
-        {"role": "system", "content": f"Conversation memory:\n{memory}"},
+        {"role": "system", "content": f"Today's date: {today}"},
+        {"role": "system", "content": f"Memory:\n{memory}"}
     ]
 
-    if link_block:
-        msgs.append({
-            "role": "system",
-            "content": f"Here are verified real links:\n{link_block}"
-        })
+    if link_data:
+        messages.append({"role": "system", "content": f"Verified links:\n{link_data}"})
 
-    msgs.append({"role": "user", "content": prompt})
+    messages.append({"role": "user", "content": prompt})
 
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
-        messages=msgs,
+        messages=messages,
         max_tokens=2048
     )
 
     reply = completion.choices[0].message.content
-
     save_memory(user_id, prompt)
     save_memory(user_id, reply)
 
@@ -147,7 +143,7 @@ async def vision(file: UploadFile = File(...)):
         messages=[{
             "role": "user",
             "content": [
-                {"type": "input_text", "text": "Analyze this image."},
+                {"type": "input_text", "text": "Describe this image clearly."},
                 {"type": "input_image", "image": img}
             ]
         }]
@@ -155,52 +151,58 @@ async def vision(file: UploadFile = File(...)):
     return {"response": completion.choices[0].message.content}
 
 # ==========================================================
-# IMAGE GENERATION
+# IMAGE GENERATION (REAL IMAGE + DOWNLOAD)
 # ==========================================================
 @app.post("/image-generate")
 def image_generate(prompt: str):
-    output = replicate.run(
+    output = replicate_client.run(
         "stability-ai/sdxl",
         input={"prompt": prompt}
     )
-    return {"image_url": output[0]}
+
+    image_url = output[0]
+    return {
+        "image": image_url,
+        "download": image_url
+    }
 
 # ==========================================================
-# FILE GENERATION
+# PDF GENERATION (DOWNLOADABLE)
 # ==========================================================
 @app.post("/create-pdf")
 def create_pdf(text: str):
-    name = f"{uuid4()}.pdf"
+    name = f"files/{uuid4()}.pdf"
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.multi_cell(0, 8, text)
     pdf.output(name)
-    return FileResponse(name)
 
-@app.post("/create-txt")
-def create_txt(text: str):
-    name = f"{uuid4()}.txt"
-    open(name, "w").write(text)
-    return FileResponse(name)
+    return {
+        "file": f"{BASE_URL}/{name}",
+        "type": "pdf"
+    }
 
+# ==========================================================
+# PPT GENERATION (DOWNLOADABLE)
+# ==========================================================
 @app.post("/create-ppt")
 def create_ppt(text: str):
-    name = f"{uuid4()}.pptx"
+    name = f"files/{uuid4()}.pptx"
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Generated by lEvO"
     slide.placeholders[1].text = text
     prs.save(name)
-    return FileResponse(name)
+
+    return {
+        "file": f"{BASE_URL}/{name}",
+        "type": "pptx"
+    }
 
 # ==========================================================
-# GRAPH
+# FILE SERVING
 # ==========================================================
-@app.get("/graph")
-def graph():
-    name = f"{uuid4()}.png"
-    plt.plot([1, 2, 3], [10, 25, 15])
-    plt.savefig(name)
-    plt.close()
-    return FileResponse(name)
+@app.get("/files/{filename}")
+def serve_file(filename: str):
+    return FileResponse(f"files/{filename}")
